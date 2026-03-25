@@ -3,7 +3,7 @@ import { google } from "googleapis"
 import PDFDocument from "pdfkit"
 import { PassThrough } from "stream"
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+let resend = null
 
 function buildPdfBuffer(data) {
   return new Promise((resolve, reject) => {
@@ -51,7 +51,16 @@ function buildPdfBuffer(data) {
 }
 
 async function uploadToDrive(pdfBuffer, fileName) {
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
+  }
+
+  if (!process.env.GOOGLE_DRIVE_FOLDER_ID) {
+    throw new Error("Missing GOOGLE_DRIVE_FOLDER_ID")
+  }
+
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/drive.file"],
@@ -75,11 +84,36 @@ async function uploadToDrive(pdfBuffer, fileName) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" })
-  }
-
   try {
+    // ---------- Debug checks ----------
+    if (!process.env.RESEND_API_KEY) {
+      return res.status(500).json({
+        error: "Missing RESEND_API_KEY",
+      })
+    }
+
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      return res.status(500).json({
+        error: "Missing GOOGLE_SERVICE_ACCOUNT_JSON",
+      })
+    }
+
+    if (!process.env.GOOGLE_DRIVE_FOLDER_ID) {
+      return res.status(500).json({
+        error: "Missing GOOGLE_DRIVE_FOLDER_ID",
+      })
+    }
+
+    // lazy init (prevents crash on import)
+    if (!resend) {
+      resend = new Resend(process.env.RESEND_API_KEY)
+    }
+
+    // ---------- Method check ----------
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" })
+    }
+
     const data = req.body
     const email = data?.contact?.email
 
@@ -91,9 +125,13 @@ export default async function handler(req, res) {
     const safeEmail = String(email).replace(/[^a-zA-Z0-9]/g, "_")
     const fileName = `${timestamp}__${safeEmail}__roi.pdf`
 
+    // ---------- Generate PDF ----------
     const pdfBuffer = await buildPdfBuffer(data)
+
+    // ---------- Upload to Drive ----------
     const driveFile = await uploadToDrive(pdfBuffer, fileName)
 
+    // ---------- Send emails ----------
     await resend.emails.send({
       from: "sales@resonant-grid.com",
       to: "jason@resonant-grid.com",
@@ -127,6 +165,8 @@ export default async function handler(req, res) {
     })
   } catch (error) {
     console.error(error)
-    return res.status(500).json({ error: "Server error" })
+    return res.status(500).json({
+      error: error.message || "Server error",
+    })
   }
 }
