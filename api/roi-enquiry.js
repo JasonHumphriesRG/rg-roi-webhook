@@ -80,22 +80,46 @@ function drawSectionHeader(doc, title, x, y, width) {
 }
 
 function drawLabelValueRow(doc, label, value, x, y, width, options = {}) {
-  const labelWidth = options.labelWidth || 220
-  const valueWidth = width - labelWidth
+  const labelWidth = options.labelWidth || 145
+  const gap = options.gap || 12
+  const valueWidth = width - labelWidth - gap
+
+  const labelText = String(label ?? "—")
+  const valueText = String(value ?? "—")
+
+  const labelHeight = doc.heightOfString(labelText, {
+    width: labelWidth,
+    align: "left",
+  })
+
+  const valueHeight = doc.heightOfString(valueText, {
+    width: valueWidth,
+    align: "left",
+  })
+
+  const rowHeight = Math.max(labelHeight, valueHeight, 14)
 
   doc
     .font("Helvetica-Bold")
     .fontSize(10)
     .fillColor("#6E7A8B")
-    .text(label, x, y, { width: labelWidth })
+    .text(labelText, x, y, {
+      width: labelWidth,
+      align: "left",
+      lineGap: 1,
+    })
 
   doc
     .font("Helvetica")
     .fontSize(10)
     .fillColor("#0B1B3A")
-    .text(String(value ?? "—"), x + labelWidth, y, { width: valueWidth })
+    .text(valueText, x + labelWidth + gap, y, {
+      width: valueWidth,
+      align: "left",
+      lineGap: 1,
+    })
 
-  return Math.max(doc.y, y + 14)
+  return y + rowHeight + 4
 }
 
 function buildPdfBuffer(data) {
