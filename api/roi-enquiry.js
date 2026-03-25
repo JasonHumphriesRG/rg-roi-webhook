@@ -1,7 +1,7 @@
 import { Resend } from "resend"
 import { google } from "googleapis"
 import PDFDocument from "pdfkit"
-import { PassThrough } from "stream"
+import { PassThrough, Readable } from "stream"
 
 let resend = null
 
@@ -81,7 +81,7 @@ async function uploadToDrive(pdfBuffer, fileName) {
     },
     media: {
       mimeType: "application/pdf",
-      body: Buffer.from(pdfBuffer),
+      body: Readable.from(pdfBuffer),
     },
     fields: "id,name,webViewLink",
   })
