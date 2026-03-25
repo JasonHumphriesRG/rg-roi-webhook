@@ -466,14 +466,21 @@ export default async function handler(req, res) {
     }
 
     const confirmationEmail = await resend.emails.send({
-      from: "sales@resonant-grid.com",
-      to: email,
-      subject: "We’ve received your ROI submission",
-      html: `
-        <p>Thanks ${data?.contact?.name || ""},</p>
-        <p>We’ve received your ROI scenario and will get back to you shortly.</p>
-      `,
-    })
+  from: "sales@resonant-grid.com",
+  to: email,
+  subject: "We’ve received your ROI submission",
+  html: `
+    <p>Thanks ${data?.contact?.name || ""},</p>
+    <p>We’ve received your ROI scenario and will get back to you shortly.</p>
+    <p>Your ROI summary PDF is attached for reference.</p>
+  `,
+  attachments: [
+    {
+      filename: fileName,
+      content: pdfBuffer,
+    },
+  ],
+})
 
     if (confirmationEmail?.error) {
       throw new Error(
