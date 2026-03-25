@@ -5,6 +5,12 @@ import { PassThrough, Readable } from "stream"
 
 let resend = null
 
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*")
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+}
+
 function buildPdfBuffer(data) {
   return new Promise((resolve, reject) => {
     try {
@@ -91,6 +97,12 @@ async function uploadToDrive(pdfBuffer, fileName) {
 }
 
 export default async function handler(req, res) {
+  setCors(res)
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end()
+  }
+
   try {
     if (!process.env.RESEND_API_KEY) {
       return res.status(500).json({ error: "Missing RESEND_API_KEY" })
