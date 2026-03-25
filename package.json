@@ -1,0 +1,10 @@
+{
+  "name": "rg-roi-webhook",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "pdfkit": "^0.15.0",
+    "resend": "^4.0.0"
+  }
+}
