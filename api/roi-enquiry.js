@@ -84,6 +84,7 @@ async function uploadToDrive(pdfBuffer, fileName) {
       body: Readable.from(pdfBuffer),
     },
     fields: "id,name,webViewLink",
+    supportsAllDrives: true,
   })
 
   return response.data
