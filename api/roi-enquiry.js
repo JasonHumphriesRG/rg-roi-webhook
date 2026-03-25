@@ -162,7 +162,32 @@ function buildPdfBuffer(data) {
       const inputs = data.calculator?.inputs || {}
       const assumptions = data.calculator?.assumptions || {}
       const outputs = data.calculator?.outputs || {}
+      const reliabilityRevenueUplift =
+    Number(inputs.annualRegulatedRevenue || 0) *
+    (Number(assumptions.reliabilityExposurePct || 0) / 100) *
+    (Number(assumptions.underClaimPct || 0) / 100)
+  
+  const misattributionValue =
+    Number(inputs.annualOutageEvents || 0) *
+    (Number(assumptions.misattributionPct || 0) / 100) *
+    Number(inputs.avgCostPerMisclassifiedEvent || 0)
+  
+  const telecomRecoveryValue =
+    Number(inputs.numberOfMeters || 0) *
+    Number(inputs.monthlyCommsCostPerMeter || 0) *
+    12 *
+    (Number(assumptions.telecomRecoveryPct || 0) / 100)
+  
+  const operationalSavings =
+    (
+      Number(inputs.annualInternalFTECost || 0) +
+      Number(inputs.annualConsultantCost || 0) +
+      Number(inputs.annualManagementOverhead || 0) +
+      Number(inputs.annualAuditRemediationCost || 0)
+    ) *
+    (Number(assumptions.operationalSavingsPct || 0) / 100)
 
+      
       // Page background header area
       doc
         .roundedRect(left, 35, pageWidth, 96, 18)
@@ -217,57 +242,76 @@ function buildPdfBuffer(data) {
 
       let y = 148
 
-      // Summary KPI strip
-      const kpiWidth = (pageWidth - 24) / 3
-      const kpiGap = 12
+      // Summary KPI strip (6 headline numbers)
+const kpiGap = 10
+const kpiWidth = (pageWidth - kpiGap * 2) / 3
+const kpiHeight = 72
 
-      const kpis = [
-        {
-          title: "Total Annual Value",
-          value: formatCurrency(outputs.totalAnnualValue, currency),
-          accent: brand.teal,
-        },
-        {
-          title: "Net Annual Benefit",
-          value: formatCurrency(outputs.netAnnualBenefit, currency),
-          accent: outputs.netAnnualBenefit >= 0 ? brand.green : brand.amber,
-        },
-        {
-          title: "ROI Multiple",
-          value: formatMultiple(outputs.roiMultiple),
-          accent: brand.navy,
-        },
-      ]
+const kpis = [
+  {
+    title: "Total Annual Value",
+    value: formatCurrency(outputs.totalAnnualValue, currency),
+    accent: brand.teal,
+  },
+  {
+    title: "REE Annual Fee",
+    value: formatCurrency(outputs.reeAnnualFee, currency),
+    accent: brand.amber,
+  },
+  {
+    title: "Net Annual Benefit",
+    value: formatCurrency(outputs.netAnnualBenefit, currency),
+    accent: outputs.netAnnualBenefit >= 0 ? brand.green : brand.amber,
+  },
+  {
+    title: "ROI Multiple",
+    value: formatMultiple(outputs.roiMultiple),
+    accent: brand.navy,
+  },
+  {
+    title: "Payback",
+    value: formatMonths(outputs.paybackMonths),
+    accent: brand.teal,
+  },
+  {
+    title: "Breakeven REE Price",
+    value: formatCurrency(outputs.breakevenReePrice, currency),
+    accent: brand.slate,
+  },
+]
 
-      kpis.forEach((kpi, i) => {
-        const x = left + i * (kpiWidth + kpiGap)
+kpis.forEach((kpi, i) => {
+  const row = Math.floor(i / 3)
+  const col = i % 3
+  const x = left + col * (kpiWidth + kpiGap)
+  const cardY = y + row * (kpiHeight + 12)
 
-        doc
-          .roundedRect(x, y, kpiWidth, 74, 14)
-          .fillAndStroke("#FFFFFF", brand.border)
+  doc
+    .roundedRect(x, cardY, kpiWidth, kpiHeight, 14)
+    .fillAndStroke("#FFFFFF", brand.border)
 
-        doc
-          .fillColor(brand.slate)
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .text(kpi.title, x + 12, y + 12, {
-            width: kpiWidth - 24,
-          })
+  doc
+    .fillColor(brand.slate)
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .text(kpi.title, x + 12, cardY + 12, {
+      width: kpiWidth - 24,
+    })
 
-        doc
-          .fillColor(brand.navy)
-          .font("Helvetica-Bold")
-          .fontSize(19)
-          .text(kpi.value, x + 12, y + 30, {
-            width: kpiWidth - 24,
-          })
+  doc
+    .fillColor(brand.navy)
+    .font("Helvetica-Bold")
+    .fontSize(18)
+    .text(kpi.value, x + 12, cardY + 30, {
+      width: kpiWidth - 24,
+    })
 
-        doc
-          .roundedRect(x + 12, y + 60, 36, 4, 2)
-          .fill(kpi.accent)
-      })
+  doc
+    .roundedRect(x + 12, cardY + 58, 36, 4, 2)
+    .fill(kpi.accent)
+})
 
-      y += 92
+y += kpiHeight * 2 + 24
 
       // Left column: Contact + Inputs
       let leftY = y
@@ -346,6 +390,46 @@ function buildPdfBuffer(data) {
         colWidth
       )
 
+      rightY += 18
+rightY = drawSectionHeader(doc, "Value Build-Up", rightColX, rightY, colWidth)
+rightY = drawLabelValueRow(
+  doc,
+  "Reliability revenue uplift",
+  formatCurrency(reliabilityRevenueUplift, currency),
+  rightColX,
+  rightY,
+  colWidth
+)
+rightY += 4
+rightY = drawLabelValueRow(
+  doc,
+  "Misattribution value",
+  formatCurrency(misattributionValue, currency),
+  rightColX,
+  rightY,
+  colWidth
+)
+rightY += 4
+rightY = drawLabelValueRow(
+  doc,
+  "Telecom recovery",
+  formatCurrency(telecomRecoveryValue, currency),
+  rightColX,
+  rightY,
+  colWidth
+)
+rightY += 4
+rightY = drawLabelValueRow(
+  doc,
+  "Operational savings",
+  formatCurrency(operationalSavings, currency),
+  rightColX,
+  rightY,
+  colWidth
+)
+
+      
+      
       // Cover note across full width
       const noteY = Math.max(leftY, rightY) + 20
       const noteHeaderY = drawSectionHeader(doc, "Cover Note", left, noteY, pageWidth)
