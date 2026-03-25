@@ -23,18 +23,89 @@ function formatCurrency(value, currency = "GBP") {
   }
 }
 
+function formatCurrency2(value, currency = "GBP") {
+  try {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value ?? 0)
+  } catch {
+    return `${currency} ${Number(value ?? 0).toFixed(2)}`
+  }
+}
+
+function formatNumber(value) {
+  return Number(value ?? 0).toLocaleString("en-GB")
+}
+
+function formatPercentWhole(value) {
+  return `${Math.round(Number(value ?? 0))}%`
+}
+
+function formatMultiple(value) {
+  return `${Number(value ?? 0).toFixed(1)}x`
+}
+
+function formatMonths(value) {
+  if (value == null || !isFinite(value)) return "—"
+  return `${Number(value).toFixed(1)} months`
+}
+
 async function loadLogoBuffer() {
   if (!process.env.PDF_LOGO_URL) return null
+
   const response = await fetch(process.env.PDF_LOGO_URL)
-  if (!response.ok) throw new Error("Failed to load logo from PDF_LOGO_URL")
+  if (!response.ok) {
+    throw new Error(`Failed to load logo from PDF_LOGO_URL: ${response.status}`)
+  }
+
   const arrayBuffer = await response.arrayBuffer()
   return Buffer.from(arrayBuffer)
+}
+
+function drawSectionHeader(doc, title, x, y, width) {
+  doc
+    .roundedRect(x, y, width, 22, 8)
+    .fillAndStroke("#F6F9FC", "#E6EDF3")
+
+  doc
+    .fillColor("#0B1B3A")
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .text(title, x + 10, y + 6, { width: width - 20 })
+
+  return y + 30
+}
+
+function drawLabelValueRow(doc, label, value, x, y, width, options = {}) {
+  const labelWidth = options.labelWidth || 220
+  const valueWidth = width - labelWidth
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor("#6E7A8B")
+    .text(label, x, y, { width: labelWidth })
+
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor("#0B1B3A")
+    .text(String(value ?? "—"), x + labelWidth, y, { width: valueWidth })
+
+  return Math.max(doc.y, y + 14)
 }
 
 function buildPdfBuffer(data) {
   return new Promise(async (resolve, reject) => {
     try {
-      const doc = new PDFDocument({ margin: 40, size: "A4" })
+      const doc = new PDFDocument({
+        margin: 40,
+        size: "A4",
+      })
+
       const stream = new PassThrough()
       const chunks = []
 
@@ -46,51 +117,223 @@ function buildPdfBuffer(data) {
 
       const logoBuffer = await loadLogoBuffer().catch(() => null)
 
-      doc.roundedRect(40, 35, 515, 90, 16).fillAndStroke("#FFFFFF", "#E6EDF3")
-
-      if (logoBuffer) {
-        doc.image(logoBuffer, 58, 52, { fit: [110, 40] })
+      const brand = {
+        navy: "#0B1B3A",
+        teal: "#00B5A4",
+        green: "#3ED37A",
+        amber: "#F4A300",
+        slate: "#6E7A8B",
+        cloud: "#F6F9FC",
+        border: "#E6EDF3",
       }
 
-      doc.fillColor("#0B1B3A").font("Helvetica-Bold").fontSize(22).text("REE ROI Submission", 190, 52)
-      doc.fillColor("#6E7A8B").font("Helvetica").fontSize(11).text(
-        "Calculator summary, submission details, business inputs, assumptions, and ROI outputs.",
-        190,
-        82,
-        { width: 300 }
+      const pageWidth =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right
+      const left = doc.page.margins.left
+      const gap = 20
+      const colWidth = (pageWidth - gap) / 2
+      const rightColX = left + colWidth + gap
+
+      const currency = data.calculator?.currency || "GBP"
+      const inputs = data.calculator?.inputs || {}
+      const assumptions = data.calculator?.assumptions || {}
+      const outputs = data.calculator?.outputs || {}
+
+      // Page background header area
+      doc
+        .roundedRect(left, 35, pageWidth, 96, 18)
+        .fillAndStroke("#FFFFFF", brand.border)
+
+      if (logoBuffer) {
+        doc.image(logoBuffer, left + 18, 54, {
+          fit: [120, 42],
+          align: "left",
+          valign: "center",
+        })
+      }
+
+      doc
+        .fillColor(brand.navy)
+        .font("Helvetica-Bold")
+        .fontSize(22)
+        .text("REE ROI Submission", left + 155, 52, {
+          width: 250,
+        })
+
+      doc
+        .fillColor(brand.slate)
+        .font("Helvetica")
+        .fontSize(11)
+        .text(
+          "Calculator summary, business inputs, assumptions, outputs, and contact details.",
+          left + 155,
+          82,
+          { width: 290, lineGap: 2 }
+        )
+
+      doc
+        .fillColor(brand.slate)
+        .font("Helvetica")
+        .fontSize(10)
+        .text(
+          `Submitted: ${data.submittedAt || new Date().toISOString()}`,
+          left + pageWidth - 180,
+          56,
+          { width: 160, align: "right" }
+        )
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .fillColor(brand.navy)
+        .text(data.calculator?.utilityName || "Unknown Utility", left + pageWidth - 180, 80, {
+          width: 160,
+          align: "right",
+        })
+
+      let y = 148
+
+      // Summary KPI strip
+      const kpiWidth = (pageWidth - 24) / 3
+      const kpiGap = 12
+
+      const kpis = [
+        {
+          title: "Total Annual Value",
+          value: formatCurrency(outputs.totalAnnualValue, currency),
+          accent: brand.teal,
+        },
+        {
+          title: "Net Annual Benefit",
+          value: formatCurrency(outputs.netAnnualBenefit, currency),
+          accent: outputs.netAnnualBenefit >= 0 ? brand.green : brand.amber,
+        },
+        {
+          title: "ROI Multiple",
+          value: formatMultiple(outputs.roiMultiple),
+          accent: brand.navy,
+        },
+      ]
+
+      kpis.forEach((kpi, i) => {
+        const x = left + i * (kpiWidth + kpiGap)
+
+        doc
+          .roundedRect(x, y, kpiWidth, 74, 14)
+          .fillAndStroke("#FFFFFF", brand.border)
+
+        doc
+          .fillColor(brand.slate)
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .text(kpi.title, x + 12, y + 12, {
+            width: kpiWidth - 24,
+          })
+
+        doc
+          .fillColor(brand.navy)
+          .font("Helvetica-Bold")
+          .fontSize(19)
+          .text(kpi.value, x + 12, y + 30, {
+            width: kpiWidth - 24,
+          })
+
+        doc
+          .roundedRect(x + 12, y + 60, 36, 4, 2)
+          .fill(kpi.accent)
+      })
+
+      y += 92
+
+      // Left column: Contact + Inputs
+      let leftY = y
+      leftY = drawSectionHeader(doc, "Contact Details", left, leftY, colWidth)
+      leftY = drawLabelValueRow(doc, "Name", data.contact?.name || "—", left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Email", data.contact?.email || "—", left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Job Title", data.contact?.jobTitle || "—", left, leftY, colWidth)
+      leftY += 14
+
+      leftY = drawSectionHeader(doc, "Business Inputs", left, leftY, colWidth)
+      leftY = drawLabelValueRow(doc, "Utility Name", data.calculator?.utilityName || "—", left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Market", data.calculator?.market || "—", left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Currency", currency, left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Number of Meters", formatNumber(inputs.numberOfMeters), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Regulated Revenue", formatCurrency(inputs.annualRegulatedRevenue, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Outage / Alert Events", formatNumber(inputs.annualOutageEvents), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Avg. Cost per Misclassified Event", formatCurrency(inputs.avgCostPerMisclassifiedEvent, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Monthly Comms Cost per Meter", formatCurrency2(inputs.monthlyCommsCostPerMeter, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Internal FTE Cost", formatCurrency(inputs.annualInternalFTECost, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Consultant Cost", formatCurrency(inputs.annualConsultantCost, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Management Overhead", formatCurrency(inputs.annualManagementOverhead, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "Annual Audit / Remediation Cost", formatCurrency(inputs.annualAuditRemediationCost, currency), left, leftY, colWidth)
+      leftY += 4
+      leftY = drawLabelValueRow(doc, "REE Price per Meter / Year", formatCurrency2(inputs.reePricePerMeterPerYear, currency), left, leftY, colWidth)
+
+      // Right column: Assumptions + Outputs
+      let rightY = y
+      rightY = drawSectionHeader(doc, "Scenario Assumptions", rightColX, rightY, colWidth)
+      rightY = drawLabelValueRow(doc, "Scenario Mode", data.calculator?.scenarioMode || "—", rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Scenario Label", data.calculator?.scenarioLabel || "—", rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Reliability Exposure", formatPercentWhole(assumptions.reliabilityExposurePct), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Under-Claim", formatPercentWhole(assumptions.underClaimPct), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Misattribution", formatPercentWhole(assumptions.misattributionPct), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Telecom Recovery", formatPercentWhole(assumptions.telecomRecoveryPct), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Operational Savings", formatPercentWhole(assumptions.operationalSavingsPct), rightColX, rightY, colWidth)
+      rightY += 14
+
+      rightY = drawSectionHeader(doc, "ROI Outputs", rightColX, rightY, colWidth)
+      rightY = drawLabelValueRow(doc, "Total Annual Value", formatCurrency(outputs.totalAnnualValue, currency), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "REE Annual Fee", formatCurrency(outputs.reeAnnualFee, currency), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Net Annual Benefit", formatCurrency(outputs.netAnnualBenefit, currency), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "ROI Multiple", formatMultiple(outputs.roiMultiple), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Payback", formatMonths(outputs.paybackMonths), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(doc, "Breakeven REE Price", formatCurrency(outputs.breakevenReePrice, currency), rightColX, rightY, colWidth)
+      rightY += 4
+      rightY = drawLabelValueRow(
+        doc,
+        "REE Share of Value",
+        `${Math.round((outputs.reeShareOfValue || 0) * 100)}%`,
+        rightColX,
+        rightY,
+        colWidth
       )
 
-      doc.moveDown(8)
-      doc.font("Helvetica").fontSize(11).fillColor("#0B1B3A")
-      doc.text(`Submitted: ${data.submittedAt || new Date().toISOString()}`)
-      doc.text(`Name: ${data.contact?.name || ""}`)
-      doc.text(`Email: ${data.contact?.email || ""}`)
-      doc.text(`Job Title: ${data.contact?.jobTitle || ""}`)
-      doc.moveDown()
+      // Cover note across full width
+      const noteY = Math.max(leftY, rightY) + 20
+      const noteHeaderY = drawSectionHeader(doc, "Cover Note", left, noteY, pageWidth)
 
-      doc.font("Helvetica-Bold").text("Business Inputs")
-      doc.font("Helvetica")
-      Object.entries(data.calculator?.inputs || {}).forEach(([k, v]) => {
-        doc.text(`${k}: ${String(v)}`)
-      })
-
-      doc.moveDown()
-      doc.font("Helvetica-Bold").text("Scenario Assumptions")
-      doc.font("Helvetica")
-      Object.entries(data.calculator?.assumptions || {}).forEach(([k, v]) => {
-        doc.text(`${k}: ${String(v)}`)
-      })
-
-      doc.moveDown()
-      doc.font("Helvetica-Bold").text("Outputs")
-      doc.font("Helvetica")
-      Object.entries(data.calculator?.outputs || {}).forEach(([k, v]) => {
-        doc.text(`${k}: ${String(v)}`)
-      })
-
-      doc.moveDown()
-      doc.font("Helvetica-Bold").text("Cover Note")
-      doc.font("Helvetica").text(data.contact?.coverNote || "-")
+      doc
+        .fillColor(brand.navy)
+        .font("Helvetica")
+        .fontSize(10)
+        .text(data.contact?.coverNote || "—", left, noteHeaderY, {
+          width: pageWidth,
+          lineGap: 4,
+        })
 
       doc.end()
     } catch (err) {
@@ -100,6 +343,14 @@ function buildPdfBuffer(data) {
 }
 
 async function uploadToDrive(pdfBuffer, fileName) {
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
+  }
+
+  if (!process.env.GOOGLE_DRIVE_FOLDER_ID) {
+    throw new Error("Missing GOOGLE_DRIVE_FOLDER_ID")
+  }
+
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
 
   const auth = new google.auth.GoogleAuth({
@@ -184,7 +435,9 @@ export default async function handler(req, res) {
 
     if (internalEmail?.error) {
       throw new Error(
-        `Internal email failed: ${internalEmail.error.message || JSON.stringify(internalEmail.error)}`
+        `Internal email failed: ${
+          internalEmail.error.message || JSON.stringify(internalEmail.error)
+        }`
       )
     }
 
@@ -200,7 +453,10 @@ export default async function handler(req, res) {
 
     if (confirmationEmail?.error) {
       throw new Error(
-        `Confirmation email failed: ${confirmationEmail.error.message || JSON.stringify(confirmationEmail.error)}`
+        `Confirmation email failed: ${
+          confirmationEmail.error.message ||
+          JSON.stringify(confirmationEmail.error)
+        }`
       )
     }
 
