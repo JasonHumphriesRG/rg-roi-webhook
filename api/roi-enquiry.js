@@ -528,7 +528,7 @@ export default async function handler(req, res) {
 
     const internalEmail = await resend.emails.send({
       from: "sales@resonant-grid.com",
-      to: "jason@resonant-grid.com",
+      to: "WebformROI@resonant-grid.com",
       replyTo: email,
       subject: `ROI Enquiry — ${data?.calculator?.utilityName || "Unknown Utility"}`,
       html: `
