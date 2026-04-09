@@ -638,22 +638,52 @@ export default async function handler(req, res) {
       )
     }
 
-    const confirmationEmail = await resend.emails.send({
-      from: "sales@resonant-grid.com",
-      to: email,
-      subject: "We’ve received your ROI submission",
-      html: `
+const confirmationEmail = await resend.emails.send({
+  from: "sales@resonant-grid.com",
+  to: email,
+  subject: "We’ve received your ROI submission",
+  html: `
+    <div style="font-family: Arial, sans-serif; color: #0B1B3A;">
+
+      <!-- Header banner -->
+      <div style="background-color:#0B1B3A; padding:16px; text-align:left;">
+        ${
+          process.env.PDF_LOGO_URL
+            ? `<img src="${process.env.PDF_LOGO_URL}" alt="Resonant Grid" style="height:32px;" />`
+            : `<span style="color:#FFFFFF; font-weight:bold;">Resonant Grid</span>`
+        }
+      </div>
+
+      <!-- Body -->
+      <div style="padding:20px; font-size:14px; line-height:1.5;">
         <p>Thanks ${escapeHtml(data?.contact?.name || "")},</p>
-        <p>We’ve received your ROI scenario and will get back to you shortly.</p>
-        <p>Your ROI summary PDF is attached for reference.</p>
-      `,
-      attachments: [
-        {
-          filename: fileName,
-          content: pdfBuffer,
-        },
-      ],
-    })
+
+        <p>
+          We’ve received your ROI scenario and will get back to you shortly.
+          Your ROI summary PDF is attached for reference.
+        </p>
+
+        <p>
+          If you'd like to get in touch directly with us please email
+          <strong>Michael Jary</strong>
+          (<a href="mailto:michael@resonant-grid.com">michael@resonant-grid.com</a>)
+          and we'll come back to you shortly.
+        </p>
+
+        <p style="margin-top:24px;">
+          With thanks for your interest,<br/>
+          <strong>from the Resonant Grid Team</strong>
+        </p>
+      </div>
+    </div>
+  `,
+  attachments: [
+    {
+      filename: fileName,
+      content: pdfBuffer,
+    },
+  ],
+})
 
     if (confirmationEmail?.error) {
       throw new Error(
