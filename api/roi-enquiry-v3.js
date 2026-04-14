@@ -1,7 +1,6 @@
 import { Resend } from "resend"
-import { google } from "googleapis"
 import PDFDocument from "pdfkit"
-import { PassThrough, Readable } from "stream"
+import { PassThrough } from "stream"
 
 let resend = null
 
@@ -32,11 +31,6 @@ function formatMultiple(value) {
   return `${Number(value || 0).toFixed(1)}x`
 }
 
-function formatMonths(value) {
-  if (!isFinite(value)) return "—"
-  return `${value.toFixed(1)} months`
-}
-
 async function buildPdfBuffer(data) {
   return new Promise((resolve, reject) => {
     try {
@@ -47,76 +41,75 @@ async function buildPdfBuffer(data) {
 
       const stream = new PassThrough()
       const chunks = []
-
       stream.on("data", (c) => chunks.push(c))
       stream.on("end", () => resolve(Buffer.concat(chunks)))
+
       doc.pipe(stream)
 
-      const currency = data.calculator.currency
       const inputs = data.calculator.inputs
       const a = data.calculator.assumptions
+      const currency = data.calculator.currency
 
-      // === V3 CALCULATOR (aligned to spreadsheet) ===
-      const reliability =
-        inputs.annualRegulatedRevenue *
-        (a.reliabilityExposurePct / 100) *
-        (a.underClaimPct / 100)
+      // === CALCS ===
+      function calcROI(s) {
+        const reliability =
+          inputs.annualRegulatedRevenue *
+          (s.reliabilityExposurePct / 100) *
+          (s.underClaimPct / 100)
 
-      const misattribution =
-        inputs.numberOfMeters *
-        (inputs.eventsPerMeter || 0) *
-        (a.misattributionPct / 100) *
-        inputs.avgCostPerMisclassifiedEvent
+        const misattribution =
+          inputs.annualOutageEvents *
+          (s.misattributionPct / 100) *
+          inputs.avgCostPerMisclassifiedEvent
 
-      const telecom =
-        inputs.numberOfMeters *
-        inputs.monthlyCommsCostPerMeter *
-        12 *
-        (a.telecomRecoveryPct / 100)
+        const telecom =
+          inputs.numberOfMeters *
+          inputs.monthlyCommsCostPerMeter *
+          12 *
+          (s.telecomRecoveryPct / 100)
 
-      const operational =
-        inputs.numberOfMeters *
-        (inputs.reportingCostPerMeter || 0) *
-        (a.operationalSavingsPct / 100)
+        const operational =
+          (inputs.annualInternalFTECost +
+            inputs.annualConsultantCost +
+            inputs.annualManagementOverhead +
+            inputs.annualAuditRemediationCost) *
+          (s.operationalSavingsPct / 100)
 
-      const total =
-        reliability + misattribution + telecom + operational
+        const total =
+          reliability + misattribution + telecom + operational
 
-      const fee =
-        inputs.numberOfMeters * inputs.reePricePerMeterPerYear
+        const fee =
+          inputs.numberOfMeters * inputs.reePricePerMeterPerYear
 
-      const net = total - fee
-      const roi = total / fee
-      const payback = fee / (total / 12)
+        return fee > 0 ? total / fee : 0
+      }
+
+      const base = calcROI(a)
+      const low = calcROI(data.calculator.scenarioLow || a)
+      const high = calcROI(data.calculator.scenarioHigh || a)
 
       // === HEADER ===
-      doc.fontSize(16).text("REE ROI Summary", { align: "left" })
-      doc.moveDown()
-
-      doc.fontSize(10).text(`Utility: ${data.calculator.utilityName}`)
-      doc.text(`Market: ${data.calculator.market}`)
-      doc.text(`Submitted: ${new Date().toLocaleString()}`)
+      doc.fontSize(16).text("REE ROI Summary")
+      doc.fontSize(8).text("Model Version: V3", { align: "right" })
       doc.moveDown()
 
       // === KPI ===
       doc.fontSize(12).text("Summary")
-      doc.text(`Total Value: ${formatCurrency(total, currency)}`)
-      doc.text(`REE Fee: ${formatCurrency(fee, currency)}`)
-      doc.text(`Net Benefit: ${formatCurrency(net, currency)}`)
-      doc.text(`ROI: ${formatMultiple(roi)}`)
-      doc.text(`Payback: ${formatMonths(payback)}`)
+      doc.text(`ROI: ${formatMultiple(base)}`)
+      doc.text(`Range: ${formatMultiple(low)} – ${formatMultiple(high)}`)
       doc.moveDown()
 
-      // === VALUE BUILD ===
-      doc.fontSize(12).text("Value Build-Up")
-      doc.text(`Reliability: ${formatCurrency(reliability, currency)}`)
-      doc.text(`Misattribution: ${formatCurrency(misattribution, currency)}`)
-      doc.text(`Telecom: ${formatCurrency(telecom, currency)}`)
-      doc.text(`Operational: ${formatCurrency(operational, currency)}`)
+      // === BUSINESS INPUTS ===
+      doc.fontSize(12).text("Business Inputs (User Supplied)")
+      doc.text(`Utility: ${data.calculator.utilityName}`)
+      doc.text(`Market: ${data.calculator.market}`)
+      doc.text(`Meters: ${inputs.numberOfMeters}`)
+      doc.text(`Revenue: ${formatCurrency(inputs.annualRegulatedRevenue, currency)}`)
+      doc.text(`Events: ${inputs.annualOutageEvents}`)
       doc.moveDown()
 
       // === ASSUMPTIONS ===
-      doc.fontSize(12).text("Assumptions")
+      doc.fontSize(12).text("Model Assumptions")
       Object.entries(a).forEach(([k, v]) => {
         doc.text(`${k}: ${v}%`)
       })
@@ -145,12 +138,11 @@ export default async function handler(req, res) {
 
     const pdf = await buildPdfBuffer(data)
 
-    // send email
     await resend.emails.send({
       from: "sales@resonant-grid.com",
       to: email,
       subject: "ROI Summary",
-      html: `<p>Thanks for your submission. Your ROI summary is attached.</p>`,
+      html: `<p>Your ROI summary is attached.</p>`,
       attachments: [
         {
           filename: "roi-summary.pdf",
