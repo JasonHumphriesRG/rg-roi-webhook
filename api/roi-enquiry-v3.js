@@ -266,7 +266,7 @@ function drawSectionHeader(doc, title, x, y, width) {
 }
 
 function drawLabelValueRow(doc, label, value, x, y, width, options = {}) {
-  const labelWidth = options.labelWidth || 118
+  const labelWidth = options.labelWidth || 132
   const gap = options.gap || 8
   const valueWidth = width - labelWidth - gap
 
@@ -305,7 +305,7 @@ function drawLabelValueRow(doc, label, value, x, y, width, options = {}) {
       lineGap: 0,
     })
 
-  return y + rowHeight + 2
+  return y + rowHeight + 4
 }
 
 function fitCoverNote(doc, text, x, y, width, maxBottomY) {
@@ -463,40 +463,36 @@ function buildPdfBuffer(data) {
 
       const kpiGap = 8
       const kpiWidth = (pageWidth - kpiGap * 2) / 3
-      const kpiHeight = 52
+      const kpiHeight = 58
 
       const kpis = [
-        {
-          title: "Total Annual Value",
-          value: formatCurrency(outputs.totalAnnualValue, currency),
-          accent: brand.teal,
-        },
-        {
-          title: "REE Annual Fee",
-          value: formatCurrency(outputs.reeAnnualFee, currency),
-          accent: brand.amber,
-        },
-        {
-          title: "Net Annual Benefit",
-          value: formatCurrency(outputs.netAnnualBenefit, currency),
-          accent: outputs.netAnnualBenefit >= 0 ? brand.green : brand.amber,
-        },
-        {
-          title: "ROI Multiple",
-          value: formatMultiple(outputs.roiMultiple),
-          accent: brand.navy,
-        },
-        {
-          title: "Payback",
-          value: formatMonths(outputs.paybackMonths),
-          accent: brand.teal,
-        },
-        {
-          title: "ROI Range",
-          value: `${formatMultiple(roiRange.low.roiMultiple)} – ${formatMultiple(roiRange.high.roiMultiple)}`,
-          accent: brand.slate,
-        },
-      ]
+  {
+    title: "Total Annual Value",
+    value: formatCurrency(outputs.totalAnnualValue, currency),
+    accent: brand.teal,
+  },
+  {
+    title: "REE Annual Fee",
+    value: formatCurrency(outputs.reeAnnualFee, currency),
+    accent: brand.amber,
+  },
+  {
+    title: "Net Annual Benefit",
+    value: formatCurrency(outputs.netAnnualBenefit, currency),
+    accent: outputs.netAnnualBenefit >= 0 ? brand.green : brand.amber,
+  },
+  {
+    title: "ROI Multiple",
+    value: formatMultiple(outputs.roiMultiple),
+    subvalue: `${formatMultiple(roiRange.low.roiMultiple)} – ${formatMultiple(roiRange.high.roiMultiple)}`,
+    accent: brand.navy,
+  },
+  {
+    title: "Payback",
+    value: formatMonths(outputs.paybackMonths),
+    accent: brand.teal,
+  },
+]
 
       kpis.forEach((kpi, i) => {
         const row = Math.floor(i / 3)
@@ -516,15 +512,28 @@ function buildPdfBuffer(data) {
             width: kpiWidth - 20,
           })
 
-        doc
-          .fillColor(brand.navy)
-          .font("Helvetica-Bold")
-          .fontSize(13)
-          .text(kpi.value, x + 10, cardY + 23, {
-            width: kpiWidth - 20,
-          })
+       
 
-        doc.roundedRect(x + 10, cardY + kpiHeight - 9, 30, 3, 2).fill(kpi.accent)
+
+        doc
+  .fillColor(brand.navy)
+  .font("Helvetica-Bold")
+  .fontSize(13)
+  .text(kpi.value, x + 10, cardY + 21, {
+    width: kpiWidth - 20,
+  })
+
+if (kpi.subvalue) {
+  doc
+    .fillColor(brand.slate)
+    .font("Helvetica")
+    .fontSize(8)
+    .text(kpi.subvalue, x + 10, cardY + 36, {
+      width: kpiWidth - 20,
+    })
+}
+
+doc.roundedRect(x + 10, cardY + kpiHeight - 9, 30, 3, 2).fill(kpi.accent)
       })
 
       y += kpiHeight * 2 + 16
@@ -746,13 +755,13 @@ function buildPdfBuffer(data) {
         colWidth
       )
       rightY = drawLabelValueRow(
-        doc,
-        "ROI Range",
-        `${formatMultiple(roiRange.low.roiMultiple)} – ${formatMultiple(roiRange.high.roiMultiple)}`,
-        rightColX,
-        rightY,
-        colWidth
-      )
+  doc,
+  "ROI Multiple",
+  `${formatMultiple(outputs.roiMultiple)} (${formatMultiple(roiRange.low.roiMultiple)} – ${formatMultiple(roiRange.high.roiMultiple)})`,
+  rightColX,
+  rightY,
+  colWidth
+)
       rightY = drawLabelValueRow(
         doc,
         "REE Share of Value",
