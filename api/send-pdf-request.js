@@ -7,17 +7,10 @@ const PAGE_PDFS = {
   "/blog/the-evidence-gap-at-the-edge-of-the-grid": {
     label: "The Evidence Gap at the Edge of the Grid",
     pdfUrl:
-      "https://drive.google.com/uc?export=download&id=1gCy8MaIZ6pkKF2OSmbPZoRqtI04eZrTI",
+      "https://drive.google.com/file/d/1gCy8MalZ6pk1KF2O5mbPZoRqt104eZrT/view?usp=sharing",
     filename: "the-evidence-gap-at-the-edge-of-the-grid.pdf",
   },
-  // Add more entries here as you publish more gated PDFs
-  // "/blog/another-article-slug": {
-  //   label: "Another Article Title",
-  //   pdfUrl: "https://drive.google.com/uc?export=download&id=FILE_ID",
-  //   filename: "another-article.pdf",
-  // },
 }
-
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*")
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
