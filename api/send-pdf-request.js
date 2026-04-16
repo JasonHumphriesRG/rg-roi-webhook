@@ -58,7 +58,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing page path" })
     }
 
-    const article = PAGE_PDFS[pagePath]
+    const storagePath = clean(body.downloadLink)
+
+   if (!storagePath) {
+  return res.status(400).json({ error: "Missing storage path" })
+}
+    const pdfBase64 = await fetchPdfBase64FromFirebase(storagePath)
 
     if (!article) {
       return res.status(400).json({
