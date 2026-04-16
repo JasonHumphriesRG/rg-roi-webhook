@@ -1,4 +1,6 @@
-import { google } from "googleapis" 
+import { google } from "googleapis"
+import { cert, getApps, initializeApp } from "firebase-admin/app"
+import { getStorage } from "firebase-admin/storage"
 
 const FOLDER_ID = "19XXwrHjNNk-qLgxXBgM4wwuFA67muPwz"
 const SHEET_FILE_NAME = "Website PDF Requests"
@@ -6,11 +8,17 @@ const SHEET_FILE_NAME = "Website PDF Requests"
 const PAGE_PDFS = {
   "/blog/the-evidence-gap-at-the-edge-of-the-grid": {
     label: "The Evidence Gap at the Edge of the Grid",
-    pdfUrl:
-      "https://drive.google.com/file/d/1gCy8MalZ6pk1KF2O5mbPZoRqt104eZrT/view?usp=sharing",
+    storagePath: "sentinel_evidence_whitepaper.pdf",
     filename: "the-evidence-gap-at-the-edge-of-the-grid.pdf",
   },
+  // Add more entries here:
+  // "/blog/another-article": {
+  //   label: "Another Article",
+  //   storagePath: "another-file.pdf",
+  //   filename: "another-file.pdf",
+  // },
 }
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*")
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -59,27 +67,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const pdfResponse = await fetch(article.pdfUrl)
-    if (!pdfResponse.ok) {
-      throw new Error(`Failed to fetch PDF from ${article.pdfUrl}`)
-    }
-
-    const contentType = pdfResponse.headers.get("content-type") || ""
-    if (
-      contentType &&
-      !contentType.toLowerCase().includes("pdf") &&
-      !contentType.toLowerCase().includes("octet-stream")
-    ) {
-      console.warn("send-pdf-request: unexpected content type", {
-        pagePath,
-        contentType,
-        pdfUrl: article.pdfUrl,
-      })
-    }
-
-    const pdfArrayBuffer = await pdfResponse.arrayBuffer()
-    const pdfBase64 = Buffer.from(pdfArrayBuffer).toString("base64")
-
+    const pdfBase64 = await fetchPdfBase64FromFirebase(article.storagePath)
     const articleLabel = articleTitle || article.label
 
     await sendViaResend({
@@ -107,7 +95,7 @@ export default async function handler(req, res) {
         articleId,
         articleLabel,
         pagePath,
-        pdfUrl: article.pdfUrl,
+        storagePath: article.storagePath,
         submittedAt,
       }),
     })
@@ -122,7 +110,7 @@ export default async function handler(req, res) {
       email,
       source: "website",
       pagePath,
-      pdfUrl: article.pdfUrl,
+      storagePath: article.storagePath,
     })
 
     return res.status(200).json({ ok: true })
@@ -138,6 +126,44 @@ export default async function handler(req, res) {
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function getFirebaseApp() {
+  if (getApps().length) return getApps()[0]
+
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON")
+  }
+
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+
+  return initializeApp({
+    credential: cert(serviceAccount),
+    storageBucket: "file-hosting-for-website.firebasestorage.app",
+  })
+}
+
+async function fetchPdfBase64FromFirebase(storagePath) {
+  const app = getFirebaseApp()
+  const bucket = getStorage(app).bucket()
+  const file = bucket.file(storagePath)
+
+  const [exists] = await file.exists()
+  if (!exists) {
+    throw new Error(`Firebase file not found: ${storagePath}`)
+  }
+
+  const [buffer] = await file.download()
+
+  const header = buffer.slice(0, 5).toString("utf8")
+  if (header !== "%PDF-") {
+    const preview = buffer.slice(0, 180).toString("utf8")
+    throw new Error(
+      `Firebase object is not a valid PDF: ${storagePath}. Preview: ${preview}`
+    )
+  }
+
+  return buffer.toString("base64")
 }
 
 function buildUserEmailHtml({ name, articleLabel }) {
@@ -159,7 +185,7 @@ function buildInternalEmailHtml({
   articleId,
   articleLabel,
   pagePath,
-  pdfUrl,
+  storagePath,
   submittedAt,
 }) {
   return `
@@ -169,7 +195,7 @@ function buildInternalEmailHtml({
         <tr><td><strong>Document</strong></td><td>${escapeHtml(articleLabel)}</td></tr>
         <tr><td><strong>Article ID</strong></td><td>${escapeHtml(articleId || "-")}</td></tr>
         <tr><td><strong>Page Path</strong></td><td>${escapeHtml(pagePath)}</td></tr>
-        <tr><td><strong>PDF URL</strong></td><td>${escapeHtml(pdfUrl)}</td></tr>
+        <tr><td><strong>Storage Path</strong></td><td>${escapeHtml(storagePath)}</td></tr>
         <tr><td><strong>Name</strong></td><td>${escapeHtml(name || "-")}</td></tr>
         <tr><td><strong>Company</strong></td><td>${escapeHtml(company || "-")}</td></tr>
         <tr><td><strong>Role</strong></td><td>${escapeHtml(role || "-")}</td></tr>
@@ -233,7 +259,7 @@ async function logRequestToGoogleSheet(row) {
         row.email,
         row.source,
         row.pagePath,
-        row.pdfUrl,
+        row.storagePath,
       ]],
     },
   })
@@ -271,42 +297,67 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
     includeItemsFromAllDrives: true,
   })
 
-  const existingFile = existing.data.files?.[0]
-  if (existingFile?.id) {
-    return existingFile.id
-  }
+  let spreadsheetId = existing.data.files?.[0]?.id
 
-  const created = await drive.files.create({
-    requestBody: {
-      name: SHEET_FILE_NAME,
-      mimeType: "application/vnd.google-apps.spreadsheet",
-      parents: [FOLDER_ID],
-    },
-    fields: "id",
-    supportsAllDrives: true,
-  })
-
-  const spreadsheetId = created.data.id
   if (!spreadsheetId) {
-    throw new Error("Failed to create Google Sheet")
+    const created = await drive.files.create({
+      requestBody: {
+        name: SHEET_FILE_NAME,
+        mimeType: "application/vnd.google-apps.spreadsheet",
+        parents: [FOLDER_ID],
+      },
+      fields: "id",
+      supportsAllDrives: true,
+    })
+
+    spreadsheetId = created.data.id
+    if (!spreadsheetId) {
+      throw new Error("Failed to create Google Sheet")
+    }
   }
 
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          updateSheetProperties: {
-            properties: {
-              sheetId: 0,
-              title: "Requests",
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId })
+  const existingTitles =
+    spreadsheet.data.sheets?.map((s) => s.properties?.title).filter(Boolean) || []
+
+  if (!existingTitles.includes("Requests")) {
+    if (existingTitles.includes("Sheet1")) {
+      const sheet1 = spreadsheet.data.sheets.find(
+        (s) => s.properties?.title === "Sheet1"
+      )
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateSheetProperties: {
+                properties: {
+                  sheetId: sheet1.properties.sheetId,
+                  title: "Requests",
+                },
+                fields: "title",
+              },
             },
-            fields: "title",
-          },
+          ],
         },
-      ],
-    },
-  })
+      })
+    } else {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: "Requests",
+                },
+              },
+            },
+          ],
+        },
+      })
+    }
+  }
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
@@ -323,7 +374,7 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
         "Email",
         "Source",
         "Page Path",
-        "PDF URL",
+        "Storage Path",
       ]],
     },
   })
