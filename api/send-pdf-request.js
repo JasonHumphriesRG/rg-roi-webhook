@@ -3,21 +3,6 @@ import { google } from "googleapis"
 const FOLDER_ID = "19XXwrHjNNk-qLgxXBgM4wwuFA67muPwz"
 const SHEET_FILE_NAME = "Website PDF Requests"
 
-const ARTICLES = {
-  "virtual-rtu-whitepaper": {
-    subject: "Your Virtual RTU White Paper",
-    pdfUrl: "https://www.resonant-grid.com/pdfs/virtual-rtu-whitepaper.pdf",
-    filename: "virtual-rtu-whitepaper.pdf",
-    label: "Virtual RTU White Paper",
-  },
-  "default-article": {
-    subject: "Your requested document",
-    pdfUrl: "https://www.resonant-grid.com/pdfs/default.pdf",
-    filename: "document.pdf",
-    label: "Requested PDF",
-  },
-}
-
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*")
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -34,7 +19,9 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {}
     const type = body.type
-    const articleId = body.articleId || "default-article"
+    const articleId = clean(body.articleId) || "default-article"
+    const articleTitle = clean(body.articleTitle)
+    const downloadLink = clean(body.downloadLink)
     const contact = body.contact || {}
 
     const name = clean(contact.name)
@@ -51,23 +38,36 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Email is required" })
     }
 
-    const article = ARTICLES[articleId] || ARTICLES["default-article"]
+    if (!downloadLink) {
+      return res.status(400).json({ error: "Missing download link" })
+    }
 
-    const pdfResponse = await fetch(article.pdfUrl)
+    const pdfResponse = await fetch(downloadLink)
     if (!pdfResponse.ok) {
-      throw new Error(`Failed to fetch PDF from ${article.pdfUrl}`)
+      throw new Error(`Failed to fetch PDF from ${downloadLink}`)
+    }
+
+    const contentType = pdfResponse.headers.get("content-type") || ""
+    if (!contentType.toLowerCase().includes("pdf")) {
+      console.warn("send-pdf-request: fetched file is not labelled as PDF", {
+        downloadLink,
+        contentType,
+      })
     }
 
     const pdfArrayBuffer = await pdfResponse.arrayBuffer()
     const pdfBase64 = Buffer.from(pdfArrayBuffer).toString("base64")
 
+    const filename = getFilenameFromUrl(downloadLink)
+    const articleLabel = articleTitle || prettifyArticleId(articleId) || "Requested PDF"
+
     await sendViaResend({
       to: email,
-      subject: article.subject,
-      html: buildUserEmailHtml({ name, articleLabel: article.label }),
+      subject: `Your requested document: ${articleLabel}`,
+      html: buildUserEmailHtml({ name, articleLabel }),
       attachments: [
         {
-          filename: article.filename,
+          filename,
           content: pdfBase64,
           type: "application/pdf",
           disposition: "attachment",
@@ -77,14 +77,15 @@ export default async function handler(req, res) {
 
     await sendViaResend({
       to: "webcontact@resonant-grid.com",
-      subject: `PDF download: ${article.label}`,
+      subject: `PDF download: ${articleLabel}`,
       html: buildInternalEmailHtml({
         name,
         company,
         role,
         email,
         articleId,
-        articleLabel: article.label,
+        articleLabel,
+        downloadLink,
         submittedAt,
       }),
     })
@@ -92,12 +93,13 @@ export default async function handler(req, res) {
     await logRequestToGoogleSheet({
       submittedAt,
       articleId,
-      articleLabel: article.label,
+      articleLabel,
       name,
       company,
       role,
       email,
       source: "website",
+      downloadLink,
     })
 
     return res.status(200).json({ ok: true })
@@ -113,6 +115,25 @@ export default async function handler(req, res) {
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function getFilenameFromUrl(url) {
+  try {
+    const parsed = new URL(url)
+    const pathname = parsed.pathname || ""
+    const lastSegment = pathname.split("/").filter(Boolean).pop()
+    if (!lastSegment) return "document.pdf"
+    return decodeURIComponent(lastSegment)
+  } catch {
+    return "document.pdf"
+  }
+}
+
+function prettifyArticleId(articleId) {
+  if (!articleId) return ""
+  return articleId
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function buildUserEmailHtml({ name, articleLabel }) {
@@ -133,6 +154,7 @@ function buildInternalEmailHtml({
   email,
   articleId,
   articleLabel,
+  downloadLink,
   submittedAt,
 }) {
   return `
@@ -140,7 +162,8 @@ function buildInternalEmailHtml({
       <p>A PDF has been requested from the website.</p>
       <table cellpadding="6" cellspacing="0" border="0">
         <tr><td><strong>Document</strong></td><td>${escapeHtml(articleLabel)}</td></tr>
-        <tr><td><strong>Article ID</strong></td><td>${escapeHtml(articleId)}</td></tr>
+        <tr><td><strong>Article ID</strong></td><td>${escapeHtml(articleId || "-")}</td></tr>
+        <tr><td><strong>Download Link</strong></td><td>${escapeHtml(downloadLink)}</td></tr>
         <tr><td><strong>Name</strong></td><td>${escapeHtml(name || "-")}</td></tr>
         <tr><td><strong>Company</strong></td><td>${escapeHtml(company || "-")}</td></tr>
         <tr><td><strong>Role</strong></td><td>${escapeHtml(role || "-")}</td></tr>
@@ -190,7 +213,7 @@ async function logRequestToGoogleSheet(row) {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: "Requests!A:H",
+    range: "Requests!A:I",
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: {
@@ -203,6 +226,7 @@ async function logRequestToGoogleSheet(row) {
         row.role,
         row.email,
         row.source,
+        row.downloadLink,
       ]],
     },
   })
@@ -279,7 +303,7 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: "Requests!A1:H1",
+    range: "Requests!A1:I1",
     valueInputOption: "RAW",
     requestBody: {
       values: [[
@@ -291,6 +315,7 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
         "Role",
         "Email",
         "Source",
+        "Download Link",
       ]],
     },
   })
