@@ -20,14 +20,13 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {}
+    const contact = body.contact || {}
 
-    const type = body.type
+    const type = clean(body.type)
     const articleId = clean(body.articleId)
-    const articleTitle = clean(body.articleTitle)
+    const articleTitle = clean(body.articleTitle) || "Requested PDF"
     const pagePath = clean(body.pagePath)
     const storagePath = clean(body.downloadLink)
-
-    const contact = body.contact || {}
 
     const name = clean(contact.name)
     const company = clean(contact.company)
@@ -45,22 +44,20 @@ export default async function handler(req, res) {
     }
 
     if (!storagePath) {
-      return res.status(400).json({ error: "Missing storage path" })
+      return res.status(400).json({ error: "Missing download link" })
     }
 
-    // 🔥 Fetch PDF from Firebase
+    console.log("Fetching PDF from Firebase:", storagePath)
+
     const pdfBase64 = await fetchPdfBase64FromFirebase(storagePath)
 
-    const articleLabel = articleTitle || "Requested PDF"
-
-    // ✅ Send to user
     await sendViaResend({
       to: email,
-      subject: `Your requested document: ${articleLabel}`,
-      html: buildUserEmailHtml({ name, articleLabel }),
+      subject: `Your requested document: ${articleTitle}`,
+      html: buildUserEmailHtml({ name, articleLabel: articleTitle }),
       attachments: [
         {
-          filename: `${articleLabel}.pdf`,
+          filename: getFilenameFromStoragePath(storagePath, articleTitle),
           content: pdfBase64,
           type: "application/pdf",
           disposition: "attachment",
@@ -68,33 +65,31 @@ export default async function handler(req, res) {
       ],
     })
 
-    // ✅ Notify internal
     await sendViaResend({
       to: "webcontact@resonant-grid.com",
-      subject: `PDF download: ${articleLabel}`,
+      subject: `PDF download: ${articleTitle}`,
       html: buildInternalEmailHtml({
         name,
         company,
         role,
         email,
         articleId,
-        articleLabel,
+        articleLabel: articleTitle,
         pagePath,
         storagePath,
         submittedAt,
       }),
     })
 
-    // ✅ Log to sheet
     await logRequestToGoogleSheet({
       submittedAt,
       articleId,
-      articleLabel,
+      articleLabel: articleTitle,
       name,
       company,
       role,
       email,
-     source: "website",
+      source: "website",
       pagePath,
       storagePath,
     })
@@ -114,11 +109,20 @@ function clean(value) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-//
-// 🔥 FIREBASE
-//
+function getFilenameFromStoragePath(storagePath, fallbackTitle = "document") {
+  const file = storagePath.split("/").pop() || ""
+  if (file.toLowerCase().endsWith(".pdf")) return file
+  return `${fallbackTitle}.pdf`
+}
+
+/* ---------------- Firebase ---------------- */
+
 function getFirebaseApp() {
   if (getApps().length) return getApps()[0]
+
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON")
+  }
 
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 
@@ -137,9 +141,11 @@ async function fetchPdfBase64FromFirebase(storagePath) {
   const bucket = getStorage(app).bucket()
   const file = bucket.file(storagePath)
 
-  console.log("Fetching Firebase file:", storagePath)
+  console.log("Firebase bucket:", bucket.name)
+  console.log("Firebase storagePath:", storagePath)
 
   const [exists] = await file.exists()
+  console.log("Firebase exists:", exists)
 
   if (!exists) {
     throw new Error(`Firebase file not found: ${storagePath}`)
@@ -148,20 +154,16 @@ async function fetchPdfBase64FromFirebase(storagePath) {
   const [buffer] = await file.download()
 
   const header = buffer.slice(0, 5).toString("utf8")
-
   if (header !== "%PDF-") {
     const preview = buffer.slice(0, 120).toString("utf8")
-    throw new Error(
-      `File is not a valid PDF. Preview: ${preview}`
-    )
+    throw new Error(`File is not a valid PDF. Preview: ${preview}`)
   }
 
   return buffer.toString("base64")
 }
 
-//
-// ✉️ EMAIL
-//
+/* ---------------- Email ---------------- */
+
 async function sendViaResend({ to, subject, html, attachments = [] }) {
   if (!process.env.RESEND_API_KEY) {
     throw new Error("Missing RESEND_API_KEY")
@@ -192,20 +194,71 @@ async function sendViaResend({ to, subject, html, attachments = [] }) {
   }
 }
 
-//
-// 🧾 GOOGLE SHEETS
-//
+function buildUserEmailHtml({ name, articleLabel }) {
+  return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #12312B;">
+      <p>Hi${name ? " " + escapeHtml(name) : ""},</p>
+      <p>Thanks for your interest in <strong>${escapeHtml(articleLabel)}</strong>. Your requested PDF is attached.</p>
+      <p>If you have any questions, just reply to this email.</p>
+      <p>Best regards,<br/>Resonant Grid</p>
+    </div>
+  `
+}
+
+function buildInternalEmailHtml({
+  name,
+  company,
+  role,
+  email,
+  articleId,
+  articleLabel,
+  pagePath,
+  storagePath,
+  submittedAt,
+}) {
+  return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #12312B;">
+      <p>A PDF has been requested from the website.</p>
+      <table cellpadding="6" cellspacing="0" border="0">
+        <tr><td><strong>Document</strong></td><td>${escapeHtml(articleLabel)}</td></tr>
+        <tr><td><strong>Article ID</strong></td><td>${escapeHtml(articleId || "-")}</td></tr>
+        <tr><td><strong>Page Path</strong></td><td>${escapeHtml(pagePath || "-")}</td></tr>
+        <tr><td><strong>Storage Path</strong></td><td>${escapeHtml(storagePath)}</td></tr>
+        <tr><td><strong>Name</strong></td><td>${escapeHtml(name || "-")}</td></tr>
+        <tr><td><strong>Company</strong></td><td>${escapeHtml(company || "-")}</td></tr>
+        <tr><td><strong>Role</strong></td><td>${escapeHtml(role || "-")}</td></tr>
+        <tr><td><strong>Email</strong></td><td>${escapeHtml(email)}</td></tr>
+        <tr><td><strong>Submitted</strong></td><td>${escapeHtml(submittedAt)}</td></tr>
+      </table>
+    </div>
+  `
+}
+
+/* ---------------- Google Sheets ---------------- */
+
 async function logRequestToGoogleSheet(row) {
-  const auth = getGoogleAuth()
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
+  }
+
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+    scopes: [
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/spreadsheets",
+    ],
+  })
+
   const drive = google.drive({ version: "v3", auth })
   const sheets = google.sheets({ version: "v4", auth })
 
-  const spreadsheetId = await getOrCreateSpreadsheetInFolder({ drive, sheets })
+  const spreadsheetId = await getOrCreateSpreadsheet({ drive, sheets })
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: "Requests!A:J",
     valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
     requestBody: {
       values: [[
         row.submittedAt,
@@ -223,29 +276,83 @@ async function logRequestToGoogleSheet(row) {
   })
 }
 
-function getGoogleAuth() {
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+async function getOrCreateSpreadsheet({ drive, sheets }) {
+  const query = [
+    `'${FOLDER_ID}' in parents`,
+    `name='${escapeForDriveQuery(SHEET_FILE_NAME)}'`,
+    `mimeType='application/vnd.google-apps.spreadsheet'`,
+    `trashed=false`,
+  ].join(" and ")
 
-  return new google.auth.GoogleAuth({
-    credentials,
-    scopes: [
-      "https://www.googleapis.com/auth/drive",
-      "https://www.googleapis.com/auth/spreadsheets",
-    ],
-  })
-}
-
-async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
-  const created = await drive.files.create({
-    requestBody: {
-      name: SHEET_FILE_NAME,
-      mimeType: "application/vnd.google-apps.spreadsheet",
-      parents: [FOLDER_ID],
-    },
-    fields: "id",
+  const existing = await drive.files.list({
+    q: query,
+    fields: "files(id,name)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   })
 
-  const spreadsheetId = created.data.id
+  let spreadsheetId = existing.data.files?.[0]?.id
+
+  if (!spreadsheetId) {
+    const created = await drive.files.create({
+      requestBody: {
+        name: SHEET_FILE_NAME,
+        mimeType: "application/vnd.google-apps.spreadsheet",
+        parents: [FOLDER_ID],
+      },
+      fields: "id",
+      supportsAllDrives: true,
+    })
+
+    spreadsheetId = created.data.id
+    if (!spreadsheetId) {
+      throw new Error("Failed to create Google Sheet")
+    }
+  }
+
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId })
+  const sheetTitles =
+    spreadsheet.data.sheets?.map((s) => s.properties?.title).filter(Boolean) || []
+
+  if (!sheetTitles.includes("Requests")) {
+    if (sheetTitles.includes("Sheet1")) {
+      const sheet1 = spreadsheet.data.sheets.find(
+        (s) => s.properties?.title === "Sheet1"
+      )
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateSheetProperties: {
+                properties: {
+                  sheetId: sheet1.properties.sheetId,
+                  title: "Requests",
+                },
+                fields: "title",
+              },
+            },
+          ],
+        },
+      })
+    } else {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: "Requests",
+                },
+              },
+            },
+          ],
+        },
+      })
+    }
+  }
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
@@ -270,14 +377,15 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
   return spreadsheetId
 }
 
-function buildUserEmailHtml({ name, articleLabel }) {
-  return `
-    <p>Hi ${name || ""},</p>
-    <p>Your requested document <strong>${articleLabel}</strong> is attached.</p>
-    <p>Regards,<br/>Resonant Grid</p>
-  `
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
 }
 
-function buildInternalEmailHtml(data) {
-  return `<pre>${JSON.stringify(data, null, 2)}</pre>`
+function escapeForDriveQuery(value) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll("'", "\\'")
 }
