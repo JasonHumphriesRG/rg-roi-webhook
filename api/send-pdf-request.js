@@ -3,6 +3,21 @@ import { google } from "googleapis"
 const FOLDER_ID = "19XXwrHjNNk-qLgxXBgM4wwuFA67muPwz"
 const SHEET_FILE_NAME = "Website PDF Requests"
 
+const PAGE_PDFS = {
+  "/blog/the-evidence-gap-at-the-edge-of-the-grid": {
+    label: "The Evidence Gap at the Edge of the Grid",
+    pdfUrl:
+      "https://drive.google.com/uc?export=download&id=1gCy8MaIZ6pkKF2OSmbPZoRqtI04eZrTI",
+    filename: "the-evidence-gap-at-the-edge-of-the-grid.pdf",
+  },
+  // Add more entries here as you publish more gated PDFs
+  // "/blog/another-article-slug": {
+  //   label: "Another Article Title",
+  //   pdfUrl: "https://drive.google.com/uc?export=download&id=FILE_ID",
+  //   filename: "another-article.pdf",
+  // },
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*")
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -21,7 +36,7 @@ export default async function handler(req, res) {
     const type = body.type
     const articleId = clean(body.articleId) || "default-article"
     const articleTitle = clean(body.articleTitle)
-    const downloadLink = clean(body.downloadLink)
+    const pagePath = clean(body.pagePath)
     const contact = body.contact || {}
 
     const name = clean(contact.name)
@@ -38,28 +53,41 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Email is required" })
     }
 
-    if (!downloadLink) {
-      return res.status(400).json({ error: "Missing download link" })
+    if (!pagePath) {
+      return res.status(400).json({ error: "Missing page path" })
     }
 
-    const pdfResponse = await fetch(downloadLink)
+    const article = PAGE_PDFS[pagePath]
+
+    if (!article) {
+      return res.status(400).json({
+        error: "Unknown article path",
+        detail: `No PDF mapping found for ${pagePath}`,
+      })
+    }
+
+    const pdfResponse = await fetch(article.pdfUrl)
     if (!pdfResponse.ok) {
-      throw new Error(`Failed to fetch PDF from ${downloadLink}`)
+      throw new Error(`Failed to fetch PDF from ${article.pdfUrl}`)
     }
 
     const contentType = pdfResponse.headers.get("content-type") || ""
-    if (!contentType.toLowerCase().includes("pdf")) {
-      console.warn("send-pdf-request: fetched file is not labelled as PDF", {
-        downloadLink,
+    if (
+      contentType &&
+      !contentType.toLowerCase().includes("pdf") &&
+      !contentType.toLowerCase().includes("octet-stream")
+    ) {
+      console.warn("send-pdf-request: unexpected content type", {
+        pagePath,
         contentType,
+        pdfUrl: article.pdfUrl,
       })
     }
 
     const pdfArrayBuffer = await pdfResponse.arrayBuffer()
     const pdfBase64 = Buffer.from(pdfArrayBuffer).toString("base64")
 
-    const filename = getFilenameFromUrl(downloadLink)
-    const articleLabel = articleTitle || prettifyArticleId(articleId) || "Requested PDF"
+    const articleLabel = articleTitle || article.label
 
     await sendViaResend({
       to: email,
@@ -67,7 +95,7 @@ export default async function handler(req, res) {
       html: buildUserEmailHtml({ name, articleLabel }),
       attachments: [
         {
-          filename,
+          filename: article.filename,
           content: pdfBase64,
           type: "application/pdf",
           disposition: "attachment",
@@ -85,7 +113,8 @@ export default async function handler(req, res) {
         email,
         articleId,
         articleLabel,
-        downloadLink,
+        pagePath,
+        pdfUrl: article.pdfUrl,
         submittedAt,
       }),
     })
@@ -99,7 +128,8 @@ export default async function handler(req, res) {
       role,
       email,
       source: "website",
-      downloadLink,
+      pagePath,
+      pdfUrl: article.pdfUrl,
     })
 
     return res.status(200).json({ ok: true })
@@ -115,25 +145,6 @@ export default async function handler(req, res) {
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : ""
-}
-
-function getFilenameFromUrl(url) {
-  try {
-    const parsed = new URL(url)
-    const pathname = parsed.pathname || ""
-    const lastSegment = pathname.split("/").filter(Boolean).pop()
-    if (!lastSegment) return "document.pdf"
-    return decodeURIComponent(lastSegment)
-  } catch {
-    return "document.pdf"
-  }
-}
-
-function prettifyArticleId(articleId) {
-  if (!articleId) return ""
-  return articleId
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function buildUserEmailHtml({ name, articleLabel }) {
@@ -154,7 +165,8 @@ function buildInternalEmailHtml({
   email,
   articleId,
   articleLabel,
-  downloadLink,
+  pagePath,
+  pdfUrl,
   submittedAt,
 }) {
   return `
@@ -163,7 +175,8 @@ function buildInternalEmailHtml({
       <table cellpadding="6" cellspacing="0" border="0">
         <tr><td><strong>Document</strong></td><td>${escapeHtml(articleLabel)}</td></tr>
         <tr><td><strong>Article ID</strong></td><td>${escapeHtml(articleId || "-")}</td></tr>
-        <tr><td><strong>Download Link</strong></td><td>${escapeHtml(downloadLink)}</td></tr>
+        <tr><td><strong>Page Path</strong></td><td>${escapeHtml(pagePath)}</td></tr>
+        <tr><td><strong>PDF URL</strong></td><td>${escapeHtml(pdfUrl)}</td></tr>
         <tr><td><strong>Name</strong></td><td>${escapeHtml(name || "-")}</td></tr>
         <tr><td><strong>Company</strong></td><td>${escapeHtml(company || "-")}</td></tr>
         <tr><td><strong>Role</strong></td><td>${escapeHtml(role || "-")}</td></tr>
@@ -213,7 +226,7 @@ async function logRequestToGoogleSheet(row) {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: "Requests!A:I",
+    range: "Requests!A:J",
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: {
@@ -226,7 +239,8 @@ async function logRequestToGoogleSheet(row) {
         row.role,
         row.email,
         row.source,
-        row.downloadLink,
+        row.pagePath,
+        row.pdfUrl,
       ]],
     },
   })
@@ -303,7 +317,7 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: "Requests!A1:I1",
+    range: "Requests!A1:J1",
     valueInputOption: "RAW",
     requestBody: {
       values: [[
@@ -315,7 +329,8 @@ async function getOrCreateSpreadsheetInFolder({ drive, sheets }) {
         "Role",
         "Email",
         "Source",
-        "Download Link",
+        "Page Path",
+        "PDF URL",
       ]],
     },
   })
