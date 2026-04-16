@@ -86,18 +86,18 @@ export default async function handler(req, res) {
     })
 
     // ✅ Log to sheet
-    await logRequestToGoogleSheet({
-      submittedAt,
-      articleId,
-      articleLabel,
-      name,
-      company,
-      role,
-      email,
-      source: "website",
-      pagePath,
-      storagePath,
-    })
+ //   await logRequestToGoogleSheet({
+  //    submittedAt,
+   //   articleId,
+    //  articleLabel,
+    //  name,
+    //  company,
+    //  role,
+    //  email,
+    //  source: "website",
+    //  pagePath,
+    //  storagePath,
+    //})
 
     return res.status(200).json({ ok: true })
   } catch (error) {
